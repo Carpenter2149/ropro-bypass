@@ -1,0 +1,13 @@
+{
+  "extension_id": "adbacgifemdbhdkfppmeilbgppmhaobf",
+  "hashes": {
+    "background.js": "a8b8ea9cd24c64d7643fe630dd03c992688c271bff61597e153a911c7237ad2d",
+    "js/page/friends.js": "869700b7ce75872ed4f460494b4919936e8d8b7e5d6f04be68153aad06cf7852",
+    "js/page/options.js": "68700b3611ca9d2e066f019b385cde91f9e562ef4e2c7c25356e2190fccb1d23",
+    "js/shared/roproApiAdapter.js": "1bbfb29876b9c6672b36755a4614df4eb43ade108ce990dfbed3aa7e863ed115",
+    "manifest.json": "43f17b150a11d47054441be583b6d93d6e4e93761f999169bd230953852392be",
+    "options.html": "dae6e159ee8333abb0b7366d49fa50f6bdafe38a0e14951202576c048a8cffcf"
+  },
+  "schema": 1,
+  "version": "1.7.1"
+}

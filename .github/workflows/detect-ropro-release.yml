@@ -1,0 +1,133 @@
+name: Detect RoPro releases
+
+on:
+  schedule:
+    - cron: "17 7 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+  issues: write
+
+jobs:
+  audit-release:
+    runs-on: ubuntu-latest
+    outputs:
+      branch: ${{ steps.pr.outputs.branch }}
+      changed: ${{ steps.update.outputs.changed }}
+      head_sha: ${{ steps.pr.outputs.head_sha }}
+      pr_number: ${{ steps.pr.outputs.pr_number }}
+      version: ${{ steps.update.outputs.version }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
+      - name: Download and probe current Web Store release
+        id: update
+        continue-on-error: true
+        run: python tools/update_audits.py --write
+      - name: Test compatible update
+        if: steps.update.outcome == 'success' && steps.update.outputs.changed == 'true'
+        run: |
+          python -m py_compile patch_ropro.py tools/update_audits.py
+          python -m unittest discover -s tests -v
+          python build_release.py --output-dir dist
+      - name: Open compatibility pull request
+        id: pr
+        if: steps.update.outcome == 'success' && steps.update.outputs.changed == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.update.outputs.version }}
+          BASE_BRANCH: ${{ github.event.repository.default_branch }}
+        run: |
+          branch="automation/ropro-${VERSION}"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git switch -c "$branch"
+          git add audits MANIFEST.sha256
+          git commit -m "Add RoPro ${VERSION} audit profile"
+          git push --force-with-lease origin "$branch"
+          pr_number="$(gh pr list --state open --head "$branch" --json number --jq '.[0].number // empty')"
+          if [ -z "$pr_number" ]; then
+            gh pr create --base "$BASE_BRANCH" --head "$branch" --title "Add RoPro ${VERSION} audit profile" --body "Automated compatibility probe found all exact patch anchors and generated a hash-pinned profile. It will be squash-merged only after the release is independently verified on Windows, macOS, and Linux. Existing audit profiles are retained."
+            pr_number="$(gh pr list --state open --head "$branch" --json number --jq '.[0].number // empty')"
+          fi
+          test -n "$pr_number"
+          echo "branch=$branch" >> "$GITHUB_OUTPUT"
+          echo "head_sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+          echo "pr_number=$pr_number" >> "$GITHUB_OUTPUT"
+      - name: Open incompatibility issue
+        if: steps.update.outcome == 'failure'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.update.outputs.version }}
+          MESSAGE: ${{ steps.update.outputs.message }}
+        run: |
+          title="RoPro ${VERSION} requires patch-anchor review"
+          if [ -z "$(gh issue list --state open --search "${title} in:title" --json number --jq '.[0].number // empty')" ]; then
+            gh issue create --title "$title" --body "The scheduled release probe could not safely apply the current exact anchors. No audit profile was added. Review the new source and update the transforms manually. Probe result: ${MESSAGE}"
+          fi
+
+  validate-compatible-pr:
+    needs: audit-release
+    if: needs.audit-release.outputs.changed == 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+        python: ["3.9", "3.13"]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ needs.audit-release.outputs.head_sha }}
+      - uses: actions/setup-python@v6
+        with:
+          python-version: ${{ matrix.python }}
+      - name: Verify release profile and portable tooling
+        shell: bash
+        run: |
+          python -m py_compile patch_ropro.py build_release.py tools/update_audits.py
+          python -m unittest discover -s tests -v
+          python tools/update_audits.py
+          python build_release.py --output-dir dist
+
+  merge-compatible-pr:
+    needs: [audit-release, validate-compatible-pr]
+    if: needs.audit-release.outputs.changed == 'true' && needs.validate-compatible-pr.result == 'success'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Validate generated PR scope and squash-merge
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          EXPECTED_BASE: ${{ github.event.repository.default_branch }}
+          EXPECTED_BRANCH: ${{ needs.audit-release.outputs.branch }}
+          EXPECTED_HEAD_SHA: ${{ needs.audit-release.outputs.head_sha }}
+          PR_NUMBER: ${{ needs.audit-release.outputs.pr_number }}
+        run: |
+          set -euo pipefail
+          test -n "$PR_NUMBER"
+          test "$(gh pr view "$PR_NUMBER" --json state --jq .state)" = "OPEN"
+          test "$(gh pr view "$PR_NUMBER" --json author --jq .author.login)" = "github-actions[bot]"
+          test "$(gh pr view "$PR_NUMBER" --json isCrossRepository --jq .isCrossRepository)" = "false"
+          test "$(gh pr view "$PR_NUMBER" --json baseRefName --jq .baseRefName)" = "$EXPECTED_BASE"
+          test "$(gh pr view "$PR_NUMBER" --json headRefName --jq .headRefName)" = "$EXPECTED_BRANCH"
+          test "$(gh pr view "$PR_NUMBER" --json headRefOid --jq .headRefOid)" = "$EXPECTED_HEAD_SHA"
+
+          audit_count=0
+          manifest_count=0
+          while IFS= read -r changed_file; do
+            case "$changed_file" in
+              audits/*.json) audit_count=$((audit_count + 1)) ;;
+              MANIFEST.sha256) manifest_count=$((manifest_count + 1)) ;;
+              *) echo "Unexpected generated PR file: $changed_file" >&2; exit 1 ;;
+            esac
+          done < <(gh api --paginate "repos/${GH_REPO}/pulls/${PR_NUMBER}/files" --jq '.[].filename')
+          test "$audit_count" -eq 1
+          test "$manifest_count" -eq 1
+          gh pr merge "$PR_NUMBER" --squash --delete-branch

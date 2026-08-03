@@ -1,0 +1,13 @@
+pkgbase = ropro-bypass
+	pkgdesc = Apply RoPro bypasses in place
+	pkgver = 0.1.0
+	pkgrel = 5
+	url = https://github.com/Carpenter2149/ropro-bypass
+	arch = any
+	license = MIT
+	depends = python>=3.9
+	provides = ropro-client-override
+	conflicts = ropro-client-override
+	replaces = ropro-client-override
+
+pkgname = ropro-bypass

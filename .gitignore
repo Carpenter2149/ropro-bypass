@@ -1,0 +1,17 @@
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.DS_Store
+Thumbs.db
+dist/
+result
+.direnv/
+/pkg/
+/src/
+*.pkg.tar.*
+*.src.tar.*
+*.tmp
+*.bundle
+*.zip
+*.tar.gz
+SHA256SUMS
